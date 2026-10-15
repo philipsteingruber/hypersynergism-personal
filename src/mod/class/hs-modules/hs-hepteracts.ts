@@ -51,6 +51,25 @@ export class HSHepteracts extends HSModule {
         multiplierHepteract: 0
     };
 
+    // Current inventory (left side of the "x / y" meter), the cap is in #boxCounts
+    #boxBalances : { [key: string]: number } = {};
+
+    // Per-unit craft costs, mirrored from the game's Hepteracts.ts (HEPTERACT_CONVERSION / OTHER_CONVERSIONS).
+    // Everything except quarks is multiplied by the singularity "Hepteract Costs" debuff.
+    #craftCostTable : { [key: string]: { hepteracts: number; others: { name: string; amount: number; scaled: boolean }[] } } = {
+        chronosHepteract: { hepteracts: 1e4, others: [{ name: 'Obtainium', amount: 1e115, scaled: true }] },
+        hyperrealismHepteract: { hepteracts: 1e4, others: [{ name: 'Offerings', amount: 1e80, scaled: true }] },
+        quarkHepteract: { hepteracts: 1e4, others: [{ name: 'Quarks', amount: 100, scaled: false }] },
+        challengeHepteract: { hepteracts: 5e4, others: [{ name: 'Platonic Cubes', amount: 1e11, scaled: true }, { name: 'Cubes', amount: 1e22, scaled: true }] },
+        abyssHepteract: { hepteracts: 1e8, others: [{ name: 'Wow! Cubes', amount: 69, scaled: true }] },
+        acceleratorHepteract: { hepteracts: 1e5, others: [{ name: 'Tesseracts', amount: 1e14, scaled: true }] },
+        acceleratorBoostHepteract: { hepteracts: 2e5, others: [{ name: 'Hypercubes', amount: 1e10, scaled: true }] },
+        multiplierHepteract: { hepteracts: 3e5, others: [{ name: 'Obtainium', amount: 1e130, scaled: true }] }
+    };
+
+    // Singularity "Hepteract Costs" debuff, derived from a parsed per-unit hepteract cost
+    #craftCostMulti? : number;
+
     #hepteractCosts : { [key: string]: number | null } = {
         chronosHepteract: null,
         hyperrealismHepteract: null,
@@ -211,34 +230,12 @@ export class HSHepteracts extends HSModule {
                     
                     if(craftMaxBtn && capBtn && heptImg) {
 
-                        // Update and render hepteract total cost when hovering over the image
-                        heptImg.addEventListener('mouseenter', async (evt) => {
-                            const target = evt.target as HTMLImageElement;
-                            const targetId = target.id;
-                            const isQuarkHepteract = targetId.toLowerCase().includes('quark');
-
-                            if(self.#ownedHepteracts !== null && self.#ownedHepteracts !== undefined) {
-                                const currentMax = (self.#boxCounts as any)[id];
-                                const cubeCost = (self.#hepteractCosts as any)[id];
-
-                                if(currentMax === null || cubeCost === null) return;
-
-                                let hepteractDoubleCapSetting = HSSettings.getSetting('expandCostProtectionDoubleCap') as HSSetting<boolean>;
-                                let buyCost = null;
-
-                                if(hepteractDoubleCapSetting.getValue()) {
-                                    buyCost = ((currentMax * 2) /*- currentMax*/) * cubeCost;
-                                } else {
-                                    buyCost = currentMax * 2 * cubeCost;
-                                }
-
-                                if(self.#ownedHepteracts === 0) {
-                                    self.#updateCraftText(buyCost, '∞', isQuarkHepteract);
-                                } else {
-                                    const percentOwned = self.#ownedHepteracts > 0 ? buyCost / self.#ownedHepteracts : 1;
-                                    self.#updateCraftText(buyCost, percentOwned, isQuarkHepteract);
-                                }
-                            }
+                        // Render the total resource cost of "expand + max" when hovering over the image
+                        heptImg.addEventListener('mouseenter', async () => {
+                            // Give the game a moment to render this hepteract's cost text before reading it
+                            await HSUtils.wait(25);
+                            self.#parseCraftCost(id);
+                            self.#renderExpandMaxCost(id);
                         });
 
                         heptImg.addEventListener('click', async (evt) => {
@@ -393,10 +390,6 @@ export class HSHepteracts extends HSModule {
                             
                             craftMaxBtn.click();
 
-                            if(buyCost && percentHeptOwned) {
-                                self.#updateCraftText(buyCost, percentHeptOwned);
-                            }
-
                             await HSUtils.wait(5);
 
                             if(id !== 'quarkHepteract') {
@@ -434,6 +427,10 @@ export class HSHepteracts extends HSModule {
                             }
 
                             self.#expandPending = false;
+
+                            // Show what the next expand + max would cost once the meters have caught up
+                            await HSUtils.wait(50);
+                            self.#renderExpandMaxCost(id);
                         });
                     }
                 }
@@ -509,6 +506,7 @@ export class HSHepteracts extends HSModule {
     
                             try {
                                 if(split && split[1]) {
+                                    self.#boxBalances[boxName] = parseFloat(HSUtils.unfuckNumericString(split[0]));
                                     return parseFloat(HSUtils.unfuckNumericString(split[1]));
                                 }
                             } catch (e) {
@@ -569,34 +567,71 @@ export class HSHepteracts extends HSModule {
         }
     }
 
-    #updateCraftText(buyCost: number, percentOwned: number | string, isQuarkHepteract: boolean = false) {
+    // Reads the per-unit hepteract cost from the game's cost text ("One of these will cost you X Hepteracts and ...")
+    // and derives the craft cost multiplier from it, which applies to all hepteract types
+    #parseCraftCost(hepteractId: string) {
+        const costElement = document.querySelector('#hepteractCostText') as HTMLDivElement;
+        const costMatch = costElement?.innerText.match(/you\s+(.*?)\s+Hepteracts/i);
+        const table = this.#craftCostTable[hepteractId];
+
+        if(!costMatch || !table) return;
+
+        const perUnit = parseFloat(HSUtils.unfuckNumericString(costMatch[1]));
+
+        if(perUnit > 0) {
+            if(hepteractId !== 'quarkHepteract')
+                this.#hepteractCosts[hepteractId] = perUnit;
+
+            this.#craftCostMulti = perUnit / table.hepteracts;
+        }
+    }
+
+    // Mirrors the game: expanding needs a full (base cap) inventory, removes one base cap worth of
+    // hepteracts and doubles the cap, after which "max" crafts the inventory up to the new cap
+    #renderExpandMaxCost(hepteractId: string) {
+        const table = this.#craftCostTable[hepteractId];
+        const cap = (this.#boxCounts as any)[hepteractId] as number;
+        const balance = this.#boxBalances[hepteractId];
+        const multi = this.#craftCostMulti;
+
+        let text: string;
+
+        if(!table || !(cap > 0) || balance === undefined || !(multi && multi > 0)) {
+            text = 'Expand + max cost: not parsed yet, hover again in a moment';
+        } else {
+            const doubleCap = (HSSettings.getSetting('expandCostProtectionDoubleCap') as HSSetting<boolean>).getValue();
+            const baseCap = doubleCap ? cap / 2 : cap;
+            const canExpand = balance >= baseCap;
+
+            const units = canExpand
+                ? cap * 2 - Math.max(0, balance - baseCap)
+                : cap - balance;
+
+            const heptCost = units * table.hepteracts * multi;
+            const owned = this.#ownedHepteracts;
+            const ownedInfo = owned && owned > 0
+                ? ` (${HSUtils.N(heptCost / owned * 100)}% of owned${heptCost > owned ? ', NOT ENOUGH' : ''})`
+                : '';
+
+            const others = table.others
+                .map(o => `${HSUtils.N(units * o.amount * (o.scaled ? multi : 1))} ${o.name}`)
+                .join(', ');
+
+            text = canExpand
+                ? `Expand + max: ${HSUtils.N(units, 0)} crafts, costs ${HSUtils.N(heptCost)} Hepteracts${ownedInfo}, ${others}`
+                : `Can't expand yet (${HSUtils.N(balance, 0)} / ${HSUtils.N(baseCap, 0)} needed). Max only: ${HSUtils.N(units, 0)} crafts, costs ${HSUtils.N(heptCost)} Hepteracts${ownedInfo}, ${others}`;
+        }
+
         if(this.#hepteractCraftTexts) {
-            const hasCostText = this.#hepteractCraftTexts.querySelector(`#hs-costText`) as HTMLDivElement;
+            let costText = this.#hepteractCraftTexts.querySelector('#hs-costText') as HTMLDivElement;
 
-            let persOwn;
-
-            if(HSUtils.isNumeric(percentOwned)) {
-                persOwn = HSUtils.N(percentOwned as number * 100);
-            } else {
-                persOwn = percentOwned as string;
-            }
-
-            if(!hasCostText) {
-                const costText = document.createElement('div');
+            if(!costText) {
+                costText = document.createElement('div');
                 costText.id = 'hs-costText';
-
-                if(isQuarkHepteract)
-                    costText.innerText = `[${this.context}]: Total QUARK cost to max after next expand: ${HSUtils.N(buyCost)} (ESTIMATE!)`;
-                else
-                    costText.innerText = `[${this.context}]: Total HEPT cost to max after next expand: ${HSUtils.N(buyCost)} (${persOwn}% of owned)`;
-
                 this.#hepteractCraftTexts.appendChild(costText);
-            } else {
-                if(isQuarkHepteract)
-                    hasCostText.innerText = `[${this.context}]: Total QUARK cost to max after next expand: ${HSUtils.N(buyCost)} (ESTIMATE!)`;
-                else
-                    hasCostText.innerText = `[${this.context}]: Total HEPT cost to max after next expand: ${HSUtils.N(buyCost)} (${persOwn}% of owned)`;
             }
+
+            costText.innerText = `[${this.context}]: ${text}`;
         }
     }
 }
