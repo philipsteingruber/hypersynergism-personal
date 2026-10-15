@@ -56,15 +56,15 @@ export class HSHepteracts extends HSModule {
 
     // Per-unit craft costs, mirrored from the game's Hepteracts.ts (HEPTERACT_CONVERSION / OTHER_CONVERSIONS).
     // Everything except quarks is multiplied by the singularity "Hepteract Costs" debuff.
-    #craftCostTable : { [key: string]: { hepteracts: number; others: { name: string; amount: number; scaled: boolean }[] } } = {
-        chronosHepteract: { hepteracts: 1e4, others: [{ name: 'Obtainium', amount: 1e115, scaled: true }] },
-        hyperrealismHepteract: { hepteracts: 1e4, others: [{ name: 'Offerings', amount: 1e80, scaled: true }] },
-        quarkHepteract: { hepteracts: 1e4, others: [{ name: 'Quarks', amount: 100, scaled: false }] },
-        challengeHepteract: { hepteracts: 5e4, others: [{ name: 'Platonic Cubes', amount: 1e11, scaled: true }, { name: 'Cubes', amount: 1e22, scaled: true }] },
-        abyssHepteract: { hepteracts: 1e8, others: [{ name: 'Wow! Cubes', amount: 69, scaled: true }] },
-        acceleratorHepteract: { hepteracts: 1e5, others: [{ name: 'Tesseracts', amount: 1e14, scaled: true }] },
-        acceleratorBoostHepteract: { hepteracts: 2e5, others: [{ name: 'Hypercubes', amount: 1e10, scaled: true }] },
-        multiplierHepteract: { hepteracts: 3e5, others: [{ name: 'Obtainium', amount: 1e130, scaled: true }] }
+    #craftCostTable : { [key: string]: { baseCap: number; hepteracts: number; others: { name: string; amount: number; scaled: boolean }[] } } = {
+        chronosHepteract: { baseCap: 1000, hepteracts: 1e4, others: [{ name: 'Obtainium', amount: 1e115, scaled: true }] },
+        hyperrealismHepteract: { baseCap: 1000, hepteracts: 1e4, others: [{ name: 'Offerings', amount: 1e80, scaled: true }] },
+        quarkHepteract: { baseCap: 1000, hepteracts: 1e4, others: [{ name: 'Quarks', amount: 100, scaled: false }] },
+        challengeHepteract: { baseCap: 1000, hepteracts: 5e4, others: [{ name: 'Platonic Cubes', amount: 1e11, scaled: true }, { name: 'Cubes', amount: 1e22, scaled: true }] },
+        abyssHepteract: { baseCap: 1, hepteracts: 1e8, others: [{ name: 'Wow! Cubes', amount: 69, scaled: true }] },
+        acceleratorHepteract: { baseCap: 1000, hepteracts: 1e5, others: [{ name: 'Tesseracts', amount: 1e14, scaled: true }] },
+        acceleratorBoostHepteract: { baseCap: 1000, hepteracts: 2e5, others: [{ name: 'Hypercubes', amount: 1e10, scaled: true }] },
+        multiplierHepteract: { baseCap: 1000, hepteracts: 3e5, others: [{ name: 'Obtainium', amount: 1e130, scaled: true }] }
     };
 
     // Singularity "Hepteract Costs" debuff, derived from a parsed per-unit hepteract cost
@@ -600,12 +600,22 @@ export class HSHepteracts extends HSModule {
             text = 'Expand + max cost: not parsed yet, hover again in a moment';
         } else {
             const doubleCap = (HSSettings.getSetting('expandCostProtectionDoubleCap') as HSSetting<boolean>).getValue();
-            const baseCap = doubleCap ? cap / 2 : cap;
-            const canExpand = balance >= baseCap;
+            const capMultiplier = doubleCap ? 2 : 1;
+
+            // The meter only shows ~3 significant digits ("2,04e6" for 2 048 000), but caps are always
+            // BASE_CAP * 2^n (times 2 with double capacity), so snap the parsed cap to the exact value
+            const unit = table.baseCap * capMultiplier;
+            const exactCap = unit * Math.pow(2, Math.max(0, Math.round(Math.log2(cap / unit))));
+            const baseCap = exactCap / capMultiplier;
+
+            // Same rounding applies to the balance, treat anything within display precision of a threshold as reaching it
+            const tolerance = 0.995;
+            const exactBalance = balance >= exactCap * tolerance ? exactCap : balance;
+            const canExpand = exactBalance >= baseCap * tolerance;
 
             const units = canExpand
-                ? cap * 2 - Math.max(0, balance - baseCap)
-                : cap - balance;
+                ? exactCap * 2 - Math.max(0, exactBalance - baseCap)
+                : exactCap - exactBalance;
 
             const heptCost = units * table.hepteracts * multi;
             const owned = this.#ownedHepteracts;
@@ -618,8 +628,8 @@ export class HSHepteracts extends HSModule {
                 .join(', ');
 
             text = canExpand
-                ? `Expand + max: ${HSUtils.N(units, 0)} crafts, costs ${HSUtils.N(heptCost)} Hepteracts${ownedInfo}, ${others}`
-                : `Can't expand yet (${HSUtils.N(balance, 0)} / ${HSUtils.N(baseCap, 0)} needed). Max only: ${HSUtils.N(units, 0)} crafts, costs ${HSUtils.N(heptCost)} Hepteracts${ownedInfo}, ${others}`;
+                ? `Expand + max: ${HSUtils.N(units, 0, 3)} crafts, costs ${HSUtils.N(heptCost)} Hepteracts${ownedInfo}, ${others}`
+                : `Can't expand yet (${HSUtils.N(balance, 0)} / ${HSUtils.N(baseCap, 0)} needed). Max only: ${HSUtils.N(units, 0, 3)} crafts, costs ${HSUtils.N(heptCost)} Hepteracts${ownedInfo}, ${others}`;
         }
 
         if(this.#hepteractCraftTexts) {
