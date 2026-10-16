@@ -257,6 +257,10 @@ export class HSHepteracts extends HSModule {
                             self.#expandPending = true;
                             //self.#watchUpdatePending = true;
 
+                            // The owned amount watch only starts when the forge view is opened, so it's never set
+                            // if the mod was loaded while already on the forge. Read the current value directly instead.
+                            self.#refreshOwnedHepteracts();
+
                             let buyCost = null;
 
                             let percentHeptOwned = null;
@@ -414,17 +418,7 @@ export class HSHepteracts extends HSModule {
                                 }
                             }
                            
-                            const ownedHeptQuantElement = !self.#ownedHepteractsElement ? document.querySelector('#hepteractQuantity') as HTMLElement : self.#ownedHepteractsElement;
-
-                            if(ownedHeptQuantElement) {
-                                const subElement = ownedHeptQuantElement.querySelector('span') as HTMLSpanElement;
-
-                                if(subElement) {
-                                    const value = subElement.innerText;
-                                    const hepts = parseFloat(HSUtils.unfuckNumericString(value));
-                                    self.#ownedHepteracts = hepts;
-                                }
-                            }
+                            self.#refreshOwnedHepteracts();
 
                             self.#expandPending = false;
 
@@ -586,9 +580,24 @@ export class HSHepteracts extends HSModule {
         }
     }
 
+    // Reads the owned hepteracts ("You possess X Hepteracts") straight from the DOM
+    #refreshOwnedHepteracts() {
+        const ownedElement = this.#ownedHepteractsElement ?? document.querySelector('#hepteractQuantity') as HTMLElement;
+        const value = ownedElement?.querySelector('span')?.innerText;
+
+        if(value) {
+            const hepts = parseFloat(HSUtils.unfuckNumericString(value));
+
+            if(!isNaN(hepts))
+                this.#ownedHepteracts = hepts;
+        }
+    }
+
     // Mirrors the game: expanding needs a full (base cap) inventory, removes one base cap worth of
     // hepteracts and doubles the cap, after which "max" crafts the inventory up to the new cap
     #renderExpandMaxCost(hepteractId: string) {
+        this.#refreshOwnedHepteracts();
+
         const table = this.#craftCostTable[hepteractId];
         const cap = (this.#boxCounts as any)[hepteractId] as number;
         const balance = this.#boxBalances[hepteractId];
